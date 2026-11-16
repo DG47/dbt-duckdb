@@ -50,6 +50,11 @@ delta3_sql_expected = """
     select 1 as x, 'a' as y
 """
 
+delta4_sql = """
+    {{ config(materialized='table') }}
+    select * from {{ source('delta_source_test', 'table_2') }}
+"""
+
 
 @pytest.mark.skip_profile("buenavista", "md")
 class TestPlugins:
@@ -115,11 +120,16 @@ class TestPlugins:
             "delta_table2.sql": delta2_sql,
             "delta_table3.sql": delta3_sql,
             "delta_table3_expected.sql": delta3_sql_expected,
+            "delta_table4.sql": delta4_sql,
         }
 
     def test_plugins(self, project):
         results = run_dbt()
-        assert len(results) == 4
+        assert len(results) == 5
+
+        # table_2 is read as_of_version 0, before its second write
+        res = project.run_sql("SELECT x, y FROM delta_table4 ORDER BY x", fetch="all")
+        assert res == [(1, "a")]
 
         # check_relations_equal(
         #     project.adapter,
