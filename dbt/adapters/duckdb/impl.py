@@ -374,6 +374,28 @@ class DuckDBAdapter(SQLAdapter):
             return "/".join(globs) + self._external_file_extension(rendered_options)
         return write_location
 
+    @available
+    def external_csv_read_names(
+        self, rendered_options: dict, column_names: Sequence[str]
+    ) -> Optional[List[str]]:
+        """The column names to read a CSV external model back under when its files
+        were written without a header row, or None when they have one.
+
+        Without a header the CSV sniffer names the columns column0, column1, ...
+        or, when every column is text, takes the first row as the header. The
+        partition columns are not in the files (DuckDB adds them from the hive
+        paths), so they are left out of the names.
+        """
+        rendered_options = {k.lower(): v for k, v in rendered_options.items()}
+        header = str(rendered_options.get("header", True)).strip("'\" ").lower()
+        if header not in {"false", "0", "f", "no", "n"}:
+            return None
+        partition_by = str(rendered_options.get("partition_by") or "").strip("() ")
+        partition_columns = {
+            c.strip().strip('"').lower() for c in partition_by.split(",") if c.strip()
+        }
+        return [c for c in column_names if c.lower() not in partition_columns]
+
     @classmethod
     def _external_file_extension(cls, rendered_options: dict) -> str:
         """The extension of the files a partitioned or per-thread COPY writes."""

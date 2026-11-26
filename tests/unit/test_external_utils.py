@@ -86,6 +86,22 @@ class TestExternalUtils(unittest.TestCase):
         for (loc, opts, expected) in data:
             assert expected == self.adapter.external_read_location(loc, opts), (loc, opts)
 
+    def test_external_csv_read_names(self):
+        columns = ["id", "Name", "ds"]
+        data = [
+            ({"format": "csv", "header": 1}, None),
+            ({"format": "csv"}, None),
+            ({"format": "csv", "header": "true"}, None),
+            ({"format": "csv", "header": False}, ["id", "Name", "ds"]),
+            ({"format": "csv", "header": "0"}, ["id", "Name", "ds"]),
+            ({"format": "csv", "HEADER": "'false'"}, ["id", "Name", "ds"]),
+            # the partition columns come from the hive paths, not the files
+            ({"format": "csv", "header": 0, "partition_by": "ds"}, ["id", "Name"]),
+            ({"format": "csv", "header": 0, "partition_by": "(DS, name)"}, ["id"]),
+        ]
+        for (opts, expected) in data:
+            assert expected == self.adapter.external_csv_read_names(opts, columns), opts
+
     def test_external_write_options_normalizes_keys_in_place(self):
         # the external materialization reads the format and compression back from the dict
         opts = {"FORMAT": "CSV", "COMPRESSION": "gzip"}

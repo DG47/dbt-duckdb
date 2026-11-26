@@ -228,3 +228,75 @@ class TestEmptyGlobbedExternalMaterializations:
             relation = relation_from_name(project.adapter, name)
             result = project.run_sql(f"select count(*) from {relation}", fetch="one")
             assert result[0] == 0
+
+
+headerless_csv_sql = """
+    {{ config(materialized="external", format="csv", options={"header": false}) }}
+    select 1 as id, 'a' as name union all select 2, 'b'
+"""
+
+# Without a header row DuckDB's CSV sniffer takes the first row of an all-text
+# file as the header
+headerless_text_csv_sql = """
+    {{ config(materialized="external", format="csv", options={"header": 0}) }}
+    select 'NY' as state, 'New York' as city union all select 'CA', 'Los Angeles'
+"""
+
+headerless_empty_csv_sql = """
+    {{ config(materialized="external", format="csv", options={"header": false}) }}
+    select 1 as id, 'a' as name where false
+"""
+
+# The partition column is not in the files, DuckDB adds it from the paths
+headerless_partitioned_csv_sql = """
+    {{ config(materialized="external", format="csv", options={"header": "false", "partition_by": "id"}) }}
+    select 1 as id, 'a' as name union all select 2, 'b'
+"""
+
+headerless_csv_downstream_sql = """
+    select id, name from {{ ref('headerless_csv') }}
+"""
+
+
+class TestHeaderlessCsvExternalMaterializations:
+    """A CSV written without a header is read back under the model's column names."""
+
+    @pytest.fixture(scope="class")
+    def dbt_profile_target(self, dbt_profile_target, tmp_path_factory):
+        extroot = str(tmp_path_factory.getbasetemp() / "headerless_csv")
+        os.mkdir(extroot)
+        dbt_profile_target["external_root"] = extroot
+        return dbt_profile_target
+
+    @pytest.fixture(scope="class")
+    def models(self):
+        return {
+            "headerless_csv.sql": headerless_csv_sql,
+            "headerless_text_csv.sql": headerless_text_csv_sql,
+            "headerless_empty_csv.sql": headerless_empty_csv_sql,
+            "headerless_partitioned_csv.sql": headerless_partitioned_csv_sql,
+            "headerless_csv_downstream.sql": headerless_csv_downstream_sql,
+        }
+
+    def test_headerless_csv(self, project):
+        results = run_dbt()
+        assert len(results) == 5
+
+        expected = {
+            "headerless_csv": [(1, "a"), (2, "b")],
+            "headerless_text_csv": [("CA", "Los Angeles"), ("NY", "New York")],
+            "headerless_empty_csv": [],
+            "headerless_partitioned_csv": [(1, "a"), (2, "b")],
+            "headerless_csv_downstream": [(1, "a"), (2, "b")],
+        }
+        columns = {"headerless_text_csv": "state, city"}
+        for name, rows in expected.items():
+            relation = relation_from_name(project.adapter, name)
+            cols = columns.get(name, "id, name")
+            result = project.run_sql(f"select {cols} from {relation} order by 1", fetch="all")
+            assert [tuple(row) for row in result] == rows, name
+
+        # the files themselves have no header row
+        extroot = project.adapter.external_root()
+        with open(os.path.join(extroot, "headerless_text_csv.csv")) as f:
+            assert f.readline().strip() == "NY,New York"

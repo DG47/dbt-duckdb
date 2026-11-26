@@ -51,8 +51,10 @@
   -- Empty, non-partitioned Parquet files retain their schema, so write them as-is.
   -- Other formats and partitioned datasets need a sentinel row so DuckDB can
   -- recover the source columns when the file-backed view is created.
+  {%- set temp_columns = [] -%}
   {%- set wrote_sentinel = false -%}
   {% if format != 'parquet' or is_partitioned %}
+    {%- set temp_columns = get_columns_in_relation(temp_relation) -%}
     {%- set count_query -%}
       select count(*) as row_count from {{ temp_relation }}
     {%- endset -%}
@@ -61,7 +63,7 @@
     {% if wrote_sentinel %}
       {% call statement('main', language='sql') -%}
         insert into {{ temp_relation }} values (
-          {%- for col in get_columns_in_relation(temp_relation) -%}
+          {%- for col in temp_columns -%}
           NULL,
           {%- endfor -%}
         )
@@ -75,11 +77,11 @@
 -- create a view on top of the location
   {% call statement('main', language='sql') -%}
     create or replace view {{ intermediate_relation }} as (
-      select * from {{ external_read_function(read_location, format, config, rendered_options) }}
+      select * from {{ external_read_function(read_location, format, config, rendered_options, temp_columns | map(attribute='column') | list) }}
       -- drop the sentinel row written for an empty relation
       {% if wrote_sentinel %}
         where 1
-        {%- for col in get_columns_in_relation(temp_relation) -%}
+        {%- for col in temp_columns -%}
           {{ '' }} AND "{{ col.column }}" is not NULL
         {%- endfor -%}
       {% endif %}
