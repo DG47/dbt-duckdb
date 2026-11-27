@@ -364,6 +364,24 @@ class DuckDBAdapter(SQLAdapter):
         return ", ".join(ret)
 
     @available
+    def external_csv_null_string(self, rendered_options: dict) -> Optional[str]:
+        """The string a CSV external model's NULLs were written as, from its `null`
+        (or `nullstr`) write option, or None when they were written as empty fields.
+
+        The CSV sniffer cannot detect this string, so without it the files are read
+        back with the string itself in place of each NULL.
+        """
+        rendered_options = {k.lower(): v for k, v in rendered_options.items()}
+        value = rendered_options.get("nullstr", rendered_options.get("null"))
+        if value is None:
+            return None
+        value = str(value)
+        # a value given already quoted, as in options={"null": "'NA'"}
+        if len(value) >= 2 and value[0] == value[-1] == "'":
+            value = value[1:-1].replace("''", "'")
+        return value or None
+
+    @available
     def external_read_location(self, write_location: str, rendered_options: dict) -> str:
         rendered_options = {k.lower(): v for k, v in rendered_options.items()}
         if rendered_options.get("partition_by") or rendered_options.get("per_thread_output"):

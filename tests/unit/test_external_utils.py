@@ -97,3 +97,18 @@ class TestExternalUtils(unittest.TestCase):
         opts = {"FORMAT": "parquet", "format": "csv"}
         with self.assertRaisesRegex(CompilationError, "'FORMAT' and 'format'"):
             self.adapter.external_write_options("out", opts)
+
+    def test_external_csv_null_string(self):
+        data = [
+            ({"format": "csv"}, None),
+            ({"format": "csv", "null": "NA"}, "NA"),
+            ({"format": "csv", "null": "\\N"}, "\\N"),
+            ({"format": "csv", "NULL": "'NULL'"}, "NULL"),
+            ({"format": "csv", "nullstr": "-"}, "-"),
+            ({"format": "csv", "NullStr": "'it''s null'"}, "it's null"),
+            # an empty null string is DuckDB's default, which the reader already uses
+            ({"format": "csv", "null": ""}, None),
+            ({"format": "csv", "null": "''"}, None),
+        ]
+        for (opts, expected) in data:
+            assert expected == self.adapter.external_csv_null_string(opts), opts

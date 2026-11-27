@@ -26,6 +26,14 @@
   {%- else -%}
     {%- set read_options = config.get('parquet_read_options', {'union_by_name': False}) -%}
   {%- endif -%}
+  {#- A CSV written with a null string is read back with the same nullstr, which
+      the sniffer cannot detect: without it every NULL reads as that string -#}
+  {%- if format == 'csv' and 'nullstr' not in read_options.keys() | map('lower') | list -%}
+    {%- set null_string = adapter.external_csv_null_string(rendered_options) -%}
+    {%- if null_string is not none -%}
+      {%- set read_options = dict(read_options, nullstr=adapter.escape_sql_string(null_string)) -%}
+    {%- endif -%}
+  {%- endif -%}
   {%- if format != 'parquet' and rendered_options.get('compression') and 'compression' not in read_options -%}
     {%- set read_options = dict(read_options, compression=rendered_options['compression']) -%}
   {%- endif -%}
