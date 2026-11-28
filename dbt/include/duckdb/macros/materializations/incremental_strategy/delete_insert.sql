@@ -4,19 +4,21 @@
 
     {% if unique_key %}
         {% if unique_key is sequence and unique_key is not string %}
+            {#-- Match the keys in a subquery so that unqualified columns in the
+                 incremental predicates refer to the target table only --#}
             delete from {{target }} as DBT_INCREMENTAL_TARGET
-            using {{ source }}
-            where (
+            where exists (
+                select 1
+                from {{ source }} as DBT_INTERNAL_SOURCE
+                where
                 {% for key in unique_key %}
-                    {{ source }}.{{ key }} = DBT_INCREMENTAL_TARGET.{{ key }}
+                    DBT_INTERNAL_SOURCE.{{ key }} = DBT_INCREMENTAL_TARGET.{{ key }}
                     {{ "and " if not loop.last}}
                 {% endfor %}
-                {% if incremental_predicates %}
-                    {% for predicate in incremental_predicates %}
-                        and {{ predicate }}
-                    {% endfor %}
-                {% endif %}
-            );
+            )
+            {%- for predicate in incremental_predicates or [] %}
+                and ({{ predicate }})
+            {%- endfor -%};
         {% else %}
             delete from {{ target }}
             where (
@@ -24,11 +26,9 @@
                 select ({{ unique_key }})
                 from {{ source }}
             )
-            {%- if incremental_predicates %}
-                {% for predicate in incremental_predicates %}
-                    and {{ predicate }}
-                {% endfor %}
-            {%- endif -%};
+            {%- for predicate in incremental_predicates or [] %}
+                and ({{ predicate }})
+            {%- endfor -%};
 
         {% endif %}
     {% endif %}

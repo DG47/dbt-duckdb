@@ -862,3 +862,108 @@ class TestIncrementalMergeValidation:
         run_dbt(["run", "--select", "merge_ducklake_valid_single_update"], expect_pass=True)
         run_dbt(["run", "--select", "merge_ducklake_valid_single_update"], expect_pass=True)
         # This should always pass, whether ducklake or not
+
+
+_delete_insert_composite_key_predicate = """
+{{ config(
+    materialized='incremental',
+    incremental_strategy='delete+insert',
+    unique_key=['id', 'event_date'],
+    incremental_predicates=["updated_at >= '2023-01-01'"]
+) }}
+
+{% if is_incremental() %}
+SELECT 1 AS id, DATE '2024-01-01' AS event_date, TIMESTAMP '2024-01-05' AS updated_at, 'new' AS status
+UNION ALL
+SELECT 2 AS id, DATE '2024-01-01' AS event_date, TIMESTAMP '2024-01-05' AS updated_at, 'new' AS status
+{% else %}
+SELECT 1 AS id, DATE '2024-01-01' AS event_date, TIMESTAMP '2024-01-02' AS updated_at, 'old' AS status
+UNION ALL
+SELECT 1 AS id, DATE '2024-01-02' AS event_date, TIMESTAMP '2024-01-02' AS updated_at, 'old' AS status
+UNION ALL
+SELECT 2 AS id, DATE '2024-01-01' AS event_date, TIMESTAMP '2022-01-02' AS updated_at, 'old' AS status
+{% endif %}
+"""
+
+_delete_insert_or_predicate = """
+{{ config(
+    materialized='incremental',
+    incremental_strategy='delete+insert',
+    unique_key='id',
+    incremental_predicates=["region = 'CA' or region = 'US'"]
+) }}
+
+{% if is_incremental() %}
+SELECT 1 AS id, 'US' AS region, 'new' AS status
+{% else %}
+SELECT 1 AS id, 'US' AS region, 'old' AS status
+UNION ALL
+SELECT 2 AS id, 'US' AS region, 'old' AS status
+UNION ALL
+SELECT 3 AS id, 'EU' AS region, 'old' AS status
+{% endif %}
+"""
+
+_delete_insert_composite_key_or_predicate = """
+{{ config(
+    materialized='incremental',
+    incremental_strategy='delete+insert',
+    unique_key=['id', 'region'],
+    incremental_predicates=["region = 'CA' or region = 'US'"]
+) }}
+
+{% if is_incremental() %}
+SELECT 1 AS id, 'US' AS region, 'new' AS status
+{% else %}
+SELECT 1 AS id, 'US' AS region, 'old' AS status
+UNION ALL
+SELECT 2 AS id, 'US' AS region, 'old' AS status
+UNION ALL
+SELECT 3 AS id, 'EU' AS region, 'old' AS status
+{% endif %}
+"""
+
+
+class TestIncrementalDeleteInsertPredicates:
+    """incremental_predicates with the delete+insert strategy"""
+
+    @pytest.fixture(scope="class")
+    def models(self):
+        return {
+            "delete_insert_composite_key_predicate.sql": _delete_insert_composite_key_predicate,
+            "delete_insert_or_predicate.sql": _delete_insert_or_predicate,
+            "delete_insert_composite_key_or_predicate.sql": _delete_insert_composite_key_or_predicate,
+        }
+
+    def test_composite_key_with_unqualified_predicate(self, project):
+        """An unqualified column in a predicate refers to the target table"""
+        run_dbt(["run", "--select", "delete_insert_composite_key_predicate"])
+        run_dbt(["run", "--select", "delete_insert_composite_key_predicate"])
+
+        relation = relation_from_name(project.adapter, "delete_insert_composite_key_predicate")
+        rows = project.run_sql(
+            f"SELECT id, CAST(event_date AS VARCHAR), status FROM {relation} ORDER BY ALL",
+            fetch="all",
+        )
+        # (2, 2024-01-01) was updated before 2023, so the predicate keeps the old row
+        assert rows == [
+            (1, "2024-01-01", "new"),
+            (1, "2024-01-02", "old"),
+            (2, "2024-01-01", "new"),
+            (2, "2024-01-01", "old"),
+        ]
+
+    @pytest.mark.parametrize(
+        "model_name",
+        ["delete_insert_or_predicate", "delete_insert_composite_key_or_predicate"],
+    )
+    def test_predicate_with_or_only_deletes_matching_keys(self, project, model_name):
+        """A predicate containing OR must not delete rows whose key is not in the new data"""
+        run_dbt(["run", "--select", model_name])
+        run_dbt(["run", "--select", model_name])
+
+        relation = relation_from_name(project.adapter, model_name)
+        rows = project.run_sql(
+            f"SELECT id, region, status FROM {relation} ORDER BY id", fetch="all"
+        )
+        assert rows == [(1, "US", "new"), (2, "US", "old"), (3, "EU", "old")]
